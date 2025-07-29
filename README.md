@@ -1,4 +1,6 @@
-# Discord Counting Bot
+<img width="102" height="102" alt="Counting Bot Icon" src="https://github.com/user-attachments/assets/83254584-eb72-41b7-a486-2fca19fbf07d" /> 
+
+# Discord Counting Bot 
 
 A Discord bot that manages a counting game in a specified channel. Users take turns posting the next number in sequence (e.g., 1, 2, 3, ...), and the bot ensures rules are followed, accepting both plain numbers and simple math equations (e.g., `2+2` for 4). If a user posts an incorrect number or counts twice in a row, the count resets to 0.
 
