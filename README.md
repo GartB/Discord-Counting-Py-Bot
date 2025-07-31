@@ -78,6 +78,9 @@ A Discord bot that manages a counting game in a specified channel. Users take tu
   - The same user cannot count twice in a row.
   - Non-numeric messages or invalid equations are ignored.
   - Mistakes (wrong number or double counting) reset the count to 0.
+- **Fishing Commands**:
+  - `!fish`: You cast your rod and catch a fish.
+  - `!fishstats`: You check your collection of fish.
 
 ## Example
 - User A: `1` → ✅ (count = 1)
