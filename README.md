@@ -82,7 +82,7 @@ A Discord bot that manages a counting game in a specified channel. Users take tu
   - `!fish`: You cast your rod and catch a fish.
   - `!fishstats`: You check your collection of fish.
 
-## Example
+## Examples (Counting)
 - User A: `1` → ✅ (count = 1)
 - User B: `2` → ✅ (count = 2)
 - User A: `1+2` → ✅ (count = 3, evaluates to 3)
@@ -102,6 +102,57 @@ A Discord bot that manages a counting game in a specified channel. Users take tu
   - Enable the **Message Content Intent** in the Developer Portal.
 - **Other errors**:
   - Check the terminal for error messages and share them for assistance.
+
+
+## Fish Selling & Donation Commands
+Fish Selling Command: 
+- !sellfish <fish_type> <amount>
+
+### Available Fish Types:
+You can sell fish using multiple formats - the bot is smart enough to understand different ways to type the fish names:
+| Fish Type | Command Examples |
+|-----------|------------------|
+| Common Fish | !sellfish common 5<br>!sellfish "Common Fish 🐟" 5 |
+| Rare Fish | !sellfish rare 3<br>!sellfish "Rare Fish 🐠" 3 |
+| Epic Fish | !sellfish epic 2<br>!sellfish "Epic Fish 🐳" 2 |
+| Legendary Fish | !sellfish legendary 1<br>!sellfish "Legendary Fish 🐉" 1 |
+| Ultimate Fish | !sellfish ultimate 1<br>!sellfish "Ultimate Fish 🦅" 1 |
+
+### Fish Selling Prices:
+- 🐟 Common Fish: 10 coins each
+- 🐠 Rare Fish: 25 coins each
+- 🐳 Epic Fish: 50 coins each
+- 🐉 Legendary Fish: 100 coins each
+- 🦅 Ultimate Fish: 500 coins each
+
+### Examples:
+- !sellfish common 10    → Sells 10 Common Fish for 100 coins
+- !sellfish rare 5       → Sells 5 Rare Fish for 125 coins
+- !sellfish epic 2       → Sells 2 Epic Fish for 100 coins
+- !sellfish legendary 1  → Sells 1 Legendary Fish for 100 coins
+
+## Donation Command: !donate
+### Usage:
+- !donate @user <amount>
+
+### Features:
+- ✅ Transfer coins between players
+- ❌ Cannot donate to yourself
+- Validates you have enough coins
+- Shows confirmation message
+
+### Examples:
+- !donate @PlayerName 100    → Donates 100 coins to PlayerName
+- !donate @Friend 500        → Donates 500 coins to Friend
+- !donate @NewPlayer 50      → Donates 50 coins to NewPlayer
+
+### Success Message:
+- @YourName donated 100 coins to @PlayerName! 💰
+
+### Error Messages:
+- You can't donate to yourself! - When trying to donate to yourself
+- You don't have enough coins to donate 1000 coins! - When you don't have enough coins
+- Please specify a valid amount to donate! - When amount is 0 or negative
 
 ## IMPORTANT SECURITY INFO
 - **Keep your bot token private**. If exposed, reset it in the Developer Portal and update the script **ASAP**. 
