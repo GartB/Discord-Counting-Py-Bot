@@ -284,8 +284,61 @@ async def fishstats(ctx):
     await ctx.send(stats)
 
 @bot.command()
-async def sellfish(ctx, fish_type: str, amount: int):
+async def sellfish(ctx, fish_type: str, amount: int = 1):
     """Sell fish for coins"""
+    user_id = str(ctx.author.id)
+    
+    # Map simple fish names to full fish names with emojis
+    fish_name_mapping = {
+        "common": "Common Fish 🐟",
+        "rare": "Rare Fish 🐠", 
+        "epic": "Epic Fish 🐳",
+        "legendary": "Legendary Fish 🐉",
+        "ultimate": "Ultimate Fish 🦅",
+        "common fish": "Common Fish 🐟",
+        "rare fish": "Rare Fish 🐠",
+        "epic fish": "Epic Fish 🐳", 
+        "legendary fish": "Legendary Fish 🐉",
+        "ultimate fish": "Ultimate Fish 🦅"
+    }
+    
+    # Convert input to lowercase for easier matching
+    fish_type_lower = fish_type.lower()
+    
+    # Get the full fish name with emoji
+    if fish_type_lower in fish_name_mapping:
+        full_fish_name = fish_name_mapping[fish_type_lower]
+    else:
+        # If not found in mapping, try the original input
+        full_fish_name = fish_type
+    
+    if user_id not in fish_data or full_fish_name not in FISH_PRICES:
+        await ctx.send(f"{ctx.author.mention}, invalid fish type or you haven't caught any fish! Valid types: Common, Rare, Epic, Legendary, Ultimate")
+        return
+    
+    if amount <= 0:
+        await ctx.send(f"{ctx.author.mention}, please specify a valid amount to sell!")
+        return
+    
+    if fish_data[user_id].get(full_fish_name, 0) < amount:
+        await ctx.send(f"{ctx.author.mention}, you don't have enough {full_fish_name} to sell!")
+        return
+    
+    # Update fish and coins
+    fish_data[user_id][full_fish_name] -= amount
+    if user_id not in user_coins:
+        user_coins[user_id] = 0
+    user_coins[user_id] += FISH_PRICES[full_fish_name] * amount
+    
+    data["fish_data"] = fish_data
+    data["user_coins"] = user_coins
+    save_data(data)
+    
+    await ctx.send(f"{ctx.author.mention} sold {amount} {full_fish_name} for {FISH_PRICES[full_fish_name] * amount} coins!")
+
+@bot.command()
+async def sell(ctx, fish_type: str, amount: int = 1):
+    """Sell fish for coins (shorthand for sellfish)"""
     user_id = str(ctx.author.id)
     
     # Map simple fish names to full fish names with emojis
