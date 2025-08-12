@@ -90,6 +90,19 @@ ROD_PRICES = {
     "UltimateRod": 10000
 }
 
+# Case-insensitive rod name normalization and lookup
+def normalize_rod_name(name: str) -> str:
+    return re.sub(r'[^a-z0-9]', '', name.casefold())
+
+# Map various user inputs to canonical rod keys
+ROD_NAME_LOOKUP = {normalize_rod_name(k): k for k in ROD_PRICES.keys()}
+ROD_NAME_LOOKUP.update({
+    # Also accept short forms without the word "rod"
+    "new": "NewRod",
+    "special": "SpecialRod",
+    "ultimate": "UltimateRod",
+})
+
 # Fish selling prices
 FISH_PRICES = {
     "Common Fish 🐟": 10,
@@ -216,11 +229,17 @@ async def fish(ctx):
     user_rod = user_rods.get(user_id, "BasicRod")
     fish_types = RODS[user_rod]
     
-    # Check for double catch chance (only for NewRod and above)
+    # Check for double catch chance (different chances for different rods)
     double_catch = False
-    if user_rod != "BasicRod":
-        # 2% chance for double catch with better rods
+    if user_rod == "NewRod":
+        # 2% chance for double catch with NewRod
         double_catch = random.random() < 0.02
+    elif user_rod == "SpecialRod":
+        # 5% chance for double catch with SpecialRod
+        double_catch = random.random() < 0.04
+    elif user_rod == "UltimateRod":
+        # 7% chance for double catch with UltimateRod
+        double_catch = random.random() < 0.07
     
     # Generate random catch(es)
     if double_catch:
@@ -395,7 +414,7 @@ async def shop(ctx):
     shop_message = "🎣 Fishing Shop 🎣\n\n"
     for rod, price in ROD_PRICES.items():
         shop_message += f"{rod} - {price} coins\n"
-    shop_message += "\nUse !buyrod <rod_name> to purchase a rod!"
+    shop_message += "\nUse !buyrod rodname to purchase a rod!"
     await ctx.send(shop_message)
 
 @bot.command()
@@ -403,28 +422,30 @@ async def buyrod(ctx, *, rod_name: str):
     """Buy a fishing rod from the shop"""
     user_id = str(ctx.author.id)
     
-    if rod_name not in ROD_PRICES:
+    normalized = normalize_rod_name(rod_name)
+    canonical_rod_name = ROD_NAME_LOOKUP.get(normalized)
+    if not canonical_rod_name:
         await ctx.send(f"{ctx.author.mention}, invalid rod type! Available rods: {', '.join(ROD_PRICES.keys())}")
         return
     
     user_coins[user_id] = user_coins.get(user_id, 0)
-    if user_coins[user_id] < ROD_PRICES[rod_name]:
-        await ctx.send(f"{ctx.author.mention}, you need {ROD_PRICES[rod_name]} coins to buy {rod_name}!")
+    if user_coins[user_id] < ROD_PRICES[canonical_rod_name]:
+        await ctx.send(f"{ctx.author.mention}, you need {ROD_PRICES[canonical_rod_name]} coin(s) to buy {canonical_rod_name}!")
         return
     
     # Update user rod and coins
-    user_coins[user_id] -= ROD_PRICES[rod_name]
-    user_rods[user_id] = rod_name
+    user_coins[user_id] -= ROD_PRICES[canonical_rod_name]
+    user_rods[user_id] = canonical_rod_name
     
     data["user_coins"] = user_coins
     data["user_rods"] = user_rods
     save_data(data)
     
-    await ctx.send(f"{ctx.author.mention} purchased {rod_name} for {ROD_PRICES[rod_name]} coins!")
+    await ctx.send(f"{ctx.author.mention} purchased {canonical_rod_name} for {ROD_PRICES[canonical_rod_name]} coins!")
 
 @bot.command()
 async def donate(ctx, member: discord.Member, amount: int):
-    """Donate coins to another player"""
+    """Donate coin(s) to another player"""
     user_id = str(ctx.author.id)
     target_id = str(member.id)
     
@@ -435,7 +456,7 @@ async def donate(ctx, member: discord.Member, amount: int):
     
     # Check if user has enough coins
     if user_id not in user_coins or user_coins[user_id] < amount:
-        await ctx.send(f"{ctx.author.mention}, you don't have enough coins to donate {amount} coins!")
+        await ctx.send(f"{ctx.author.mention}, you don't have enough coin(s) to donate {amount} coin(s)!")
         return
     
     if amount <= 0:
@@ -451,7 +472,7 @@ async def donate(ctx, member: discord.Member, amount: int):
     data["user_coins"] = user_coins
     save_data(data)
     
-    await ctx.send(f"{ctx.author.mention} donated {amount} coins to {member.mention}! 💰")
+    await ctx.send(f"{ctx.author.mention} donated {amount} coin(s) to {member.mention}! 💰")
 
 # Replace 'YOUR_TOKEN_HERE' with your bot token
 bot.run('YOUR_TOKEN_HERE')
