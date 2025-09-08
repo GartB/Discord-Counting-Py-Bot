@@ -2,7 +2,7 @@
 
 # Discord Counting+ Bot 
 
-A Discord bot that manages a counting game in a specified channel. Users take turns posting the next number in sequence (e.g., 1, 2, 3, ...), and the bot ensures rules are followed, accepting both plain numbers and simple math equations (e.g., `2+2` for 4). If a user posts an incorrect number or counts twice in a row, the count resets to 0. And has a barebones fishing mechanic as was requested by a user.
+A Discord bot that manages a counting game in a specified channel. Users take turns posting the next number in sequence (e.g., 1, 2, 3, ...), and the bot ensures rules are followed, accepting both plain numbers and simple math equations (e.g., `2+2` for 4). If a user posts an incorrect number or counts twice in a row, the count resets to 0. It also includes a fishing mechanic with various commands and random fish events.
 
 ## Features
 - Monitors a designated channel for counting.
@@ -15,7 +15,7 @@ A Discord bot that manages a counting game in a specified channel. Users take tu
 - Admin commands:
   - `!setcount <number>`: Sets the current count (admin only).
   - `!resetcount`: Resets the count to 0 (admin only).
-- Basic Fishing
+- Fishing mechanic with multiple commands and random fish events.
 
 ## Requirements
 - Python 3.8 or higher
@@ -42,7 +42,7 @@ A Discord bot that manages a counting game in a specified channel. Users take tu
    - In the **Bot** tab, enable the **Message Content Intent** under **Privileged Gateway Intents**.
 
 4. **Invite the Bot to Your Server**:
-   - In the Developer Portal, go to **OAuth2** > **URL Generator**.
+   - In the Developer ⟟ Developer Portal, go to **OAuth2** > **URL Generator**.
    - Select the `bot` scope and the following permissions:
      - View Channels
      - Send Messages
@@ -78,17 +78,101 @@ A Discord bot that manages a counting game in a specified channel. Users take tu
   - The same user cannot count twice in a row.
   - Non-numeric messages or invalid equations are ignored.
   - Mistakes (wrong number or double counting) reset the count to 0.
-- **Fishing Commands**:
-  - `!fish`: You cast your rod and catch a fish.
-  - `!fishstats`: You check your collection of fish.
 
-## Examples (Counting)
-- User A: `1` → ✅ (count = 1)
-- User B: `2` → ✅ (count = 2)
-- User A: `1+2` → ✅ (count = 3, evaluates to 3)
-- User A: `4` → ❌ (double count, resets to 0, message: "you can't count twice in a row! Count reset to 0.")
-- User B: `2` → ❌ (wrong number, resets to 0, message: "wrong number! The next number should be 1. Count reset to 0.")
-- User B: `1` → ✅ (count = 1)
+## Fishing Commands
+- `!fish`: Cast your rod and catch a fish.
+- `!sell <type|all> [amount]`: Shorthand for selling fish; supports selling all.  
+  Examples: `!sell rare 3`, `!sell all`
+- `!shop`: Show available rods and prices.  
+  Example: `!shop`
+- `!buyrod <rodname>`: Buy a rod. Rods: NewRod, SpecialRod, UltimateRod. Short names allowed: new, special, ultimate.  
+  Examples: `!buyrod NewRod`, `!buyrod special`, `!buyrod ultimate`
+- `!fishstats [@user]`: Show your (or mentioned user’s) stats, including inventory worth.  
+  Examples: `!fishstats`, `!fishstats @User`
+- `!topfishers`: Top 10 by total fish caught.  
+  Example: `!topfishers`
+- `!topcoins`: Top 10 by coins.  
+  Example: `!topcoins`
+- `!toprare`: Top 10 by rare fish (Epic, Legendary, Ultimate).  
+  Example: `!toprare`
+- `!leaderboard <category>`: Leaderboards; categories: fishers, coins, rare.  
+  Examples: `!leaderboard fishers`, `!leaderboard coins`, `!leaderboard rare`
+- `!records`: Show all-time fishing records (largest catch, most of each type, biggest sale, streak).  
+  Example: `!records`
+- **Admin only**:
+  - `!setrecord <type> @user <value>`: Set a record manually. Types: largest_catch, most_common, most_rare, most_epic, most_legendary, most_ultimate, biggest_sale, streak.  
+    Examples: `!setrecord largest_catch @User 5`, `!setrecord biggest_sale @User 1200`, `!setrecord streak @User 7`
+  - `!triggerfish`: Manually trigger a random fish event.  
+    Example: `!triggerfish`
+  - `!stopfish`: Stop the current random fish event.  
+    Example: `!stopfish`
+- **Event status**:
+  - `!fishstatus`: Check if a random fish event is active and time remaining.  
+    Example: `!fishstatus`
+
+## Random Fish Events
+- Events occur randomly. By default: checked every hour with a 15% chance to start.
+- Expected frequency: about once every 6–7 hours on average (random, so can vary).
+- Duration: each event lasts 30 minutes.
+- Admins can start one anytime with `!triggerfish`.
+- To change frequency: adjust the 0.15 value in the hourly check on line 312.
+- **Participation**: Type `net` in the fishing channel during an active event to catch 2–6 fish.
+
+## Fish Selling & Donation Commands
+**Fish Selling Commands**: 
+- `!sellfish <fish_type> <amount>`
+- `!sell all`
+
+### Available Fish Types:
+You can sell fish using multiple formats - the bot is smart enough to understand different ways to type the fish names:
+| Fish Type | Command Examples |
+|-----------|------------------|
+| Common Fish | `!sellfish common 5`<br>`!sellfish "Common Fish 🐟" 5` |
+| Rare Fish | `!sellfish rare 3`<br>`!sellfish "Rare Fish 🐠" 3` |
+| Epic Fish | `!sellfish epic 2`<br>`!sellfish "Epic Fish 🐳" 2` |
+| Legendary Fish | `!sellfish legendary 1`<br>`!sellfish "Legendary Fish 🐉" 1` |
+| Ultimate Fish | `!sellfish ultimate 1`<br>`!sellfish "Ultimate Fish 🦅" 1` |
+| all | `!sell all` <br> `Sells all owned fish` |
+
+### Fish Selling Prices:
+- 🐟 Common Fish: 10 coins each
+- 🐠 Rare Fish: 25 coins each
+- 🐳 Epic Fish: 50 coins each
+- 🐉 Legendary Fish: 100 coins each
+- 🦅 Ultimate Fish: 500 coins each
+
+### Examples:
+- `!sellfish common 10` → Sells 10 Common Fish for 100 coins
+- `!sellfish rare 5` → Sells 5 Rare Fish for 125 coins
+- `!sellfish epic 2` → Sells 2 Epic Fish for 100 coins
+- `!sellfish legendary 1` → Sells 1 Legendary Fish for 100 coins
+
+## Donation Command: `!donate`
+### Usage:
+- `!donate @user <amount>`
+
+### Features:
+- ✅ Transfer coins between players
+- ❌ Cannot donate to yourself
+- Validates you have enough coins
+- Shows confirmation message
+
+### Examples:
+- `!donate @PlayerName 100` → Donates 100 coins to PlayerName
+- `!donate @Friend 500` → Donates 500 coins to Friend
+- `!donate @NewPlayer 50` → Donates 50 coins to NewPlayer
+
+### Success Message:
+- `@YourName donated 100 coins to @PlayerName! 💰`
+
+### Error Messages:
+- `You can't donate to yourself!` - When trying to donate to yourself
+- `You don't have enough coins to donate 1000 coins!` - When you don't have enough coins
+- `Please specify a valid amount to donate!` - When amount is 0 or negative
+
+## IMPORTANT SECURITY INFO
+- **Keep your bot token private**. If exposed, reset it in the Developer Portal and update the script **ASAP**. 
+- The bot uses `eval()` for math expressions with restricted input (digits, `+`, `-`, `*`, `/`, parentheses). Avoid modifying the code to allow unsafe inputs.
 
 ## Troubleshooting
 - **Bot not responding**:
@@ -102,61 +186,6 @@ A Discord bot that manages a counting game in a specified channel. Users take tu
   - Enable the **Message Content Intent** in the Developer Portal.
 - **Other errors**:
   - Check the terminal for error messages and share them for assistance.
-
-
-## Fish Selling & Donation Commands
-Fish Selling Command: 
-- !sellfish <fish_type> <amount>
-
-### Available Fish Types:
-You can sell fish using multiple formats - the bot is smart enough to understand different ways to type the fish names:
-| Fish Type | Command Examples |
-|-----------|------------------|
-| Common Fish | !sellfish common 5<br>!sellfish "Common Fish 🐟" 5 |
-| Rare Fish | !sellfish rare 3<br>!sellfish "Rare Fish 🐠" 3 |
-| Epic Fish | !sellfish epic 2<br>!sellfish "Epic Fish 🐳" 2 |
-| Legendary Fish | !sellfish legendary 1<br>!sellfish "Legendary Fish 🐉" 1 |
-| Ultimate Fish | !sellfish ultimate 1<br>!sellfish "Ultimate Fish 🦅" 1 |
-
-### Fish Selling Prices:
-- 🐟 Common Fish: 10 coins each
-- 🐠 Rare Fish: 25 coins each
-- 🐳 Epic Fish: 50 coins each
-- 🐉 Legendary Fish: 100 coins each
-- 🦅 Ultimate Fish: 500 coins each
-
-### Examples:
-- !sellfish common 10    → Sells 10 Common Fish for 100 coins
-- !sellfish rare 5       → Sells 5 Rare Fish for 125 coins
-- !sellfish epic 2       → Sells 2 Epic Fish for 100 coins
-- !sellfish legendary 1  → Sells 1 Legendary Fish for 100 coins
-
-## Donation Command: !donate
-### Usage:
-- !donate @user <amount>
-
-### Features:
-- ✅ Transfer coins between players
-- ❌ Cannot donate to yourself
-- Validates you have enough coins
-- Shows confirmation message
-
-### Examples:
-- !donate @PlayerName 100    → Donates 100 coins to PlayerName
-- !donate @Friend 500        → Donates 500 coins to Friend
-- !donate @NewPlayer 50      → Donates 50 coins to NewPlayer
-
-### Success Message:
-- @YourName donated 100 coins to @PlayerName! 💰
-
-### Error Messages:
-- You can't donate to yourself! - When trying to donate to yourself
-- You don't have enough coins to donate 1000 coins! - When you don't have enough coins
-- Please specify a valid amount to donate! - When amount is 0 or negative
-
-## IMPORTANT SECURITY INFO
-- **Keep your bot token private**. If exposed, reset it in the Developer Portal and update the script **ASAP**. 
-- The bot uses `eval()` for math expressions with restricted input (digits, `+`, `-`, `*`, `/`, parentheses). Avoid modifying the code to allow unsafe inputs.
 
 ## Contributing
 Feel free to fork this project, add features (e.g., high score tracking, leaderboard), and submit pull requests. Report issues or suggestions via the issues tab.
