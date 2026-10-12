@@ -1,28 +1,71 @@
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
+from dotenv import load_dotenv
 import re
 import random
 import json
 import os
 import time
 import asyncio
+import logging
+
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+TOKEN = os.getenv("DISCORD_TOKEN")
+if not TOKEN:
+    raise SystemExit("Missing DISCORD_TOKEN in .env")
 
 # Initialize bot with command prefix and intents
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
+bot.remove_command('help')
+
+# Reduce noisy gateway warnings that were causing formatting issues in logging
+logging.getLogger('discord.gateway').setLevel(logging.ERROR)
 
 # Channel IDs (replace with your actual channel IDs)
-COUNTING_CHANNEL_ID = Channel_For_Counting_ID_Here  # Replace with actual counting channel ID
-FISHING_CHANNEL_ID = Channel_For_Fishing_ID_Here  # Replace with actual fishing channel ID
+COUNTING_CHANNEL_ID = 1396292969182658732 # Replace with actual counting channel ID
+FISHING_CHANNEL_ID = 1399585285494276107  # Replace with actual fishing channel ID 
+
 
 # File for persistent data storage
 DATA_FILE = "bot_data.json"
+BACKUP_DIR = "backup"
 
 # Global variables for the random fish event
 random_fish_event_active = False
 random_fish_event_message = None
 random_fish_event_start_time = None
+random_fish_event_type = None
+
+EVENT_SCHOOL = "school"
+EVENT_COMMON_SWARM = "common_swarm"
+EVENT_MIXED_HAUL = "mixed_haul"
+
+FISH_EVENTS = {
+    EVENT_SCHOOL: {
+        "title": "🎣 RANDOM FISH EVENT! 🎣",
+        "description": "A school of fish has appeared! The first person to type **`net`** will catch **2-6 random fish**!",
+        "reward": "2-6 random fish (based on your rod)",
+        "ended": "The fish have swam away! No one caught them in time.",
+        "color": 0x00ff00,
+    },
+    EVENT_COMMON_SWARM: {
+        "title": "🐟 COMMON FISH SWARM! 🐟",
+        "description": "A huge swarm of common fish has appeared! The first person to type **`net`** will catch **20 Common Fish**!",
+        "reward": "20 Common Fish 🐟",
+        "ended": "The common fish swarm has moved on! No one caught them in time.",
+        "color": 0x87ceeb,
+    },
+    EVENT_MIXED_HAUL: {
+        "title": "✨ TREASURE SCHOOL! ✨",
+        "description": "A mixed school of valuable fish has appeared! The first person to type **`net`** will catch **5 Rare, 5 Epic, and 1 Legendary**!",
+        "reward": "5 Rare 🐠, 5 Epic 🐳, 1 Legendary 🐉",
+        "ended": "The treasure school has swam away! No one caught them in time.",
+        "color": 0xffd700,
+    },
+}
 
 # Load data from JSON file
 def load_data():
@@ -37,6 +80,7 @@ def load_data():
                 "user_coins": {},
                 "user_rods": {},
                 "last_fish_time": {},
+                "last_daily_time": {},
                 "records": {
                     "largest_catch": {"user_id": None, "amount": 0, "date": None},
                     "most_common_fish": {"user_id": None, "amount": 0, "date": None},
@@ -54,6 +98,7 @@ def load_data():
         "user_coins": {},
         "user_rods": {},
         "last_fish_time": {},
+        "last_daily_time": {},
         "records": {
             "largest_catch": {"user_id": None, "amount": 0, "date": None},
             "most_common_fish": {"user_id": None, "amount": 0, "date": None},
@@ -71,6 +116,49 @@ def save_data(data):
     with open(DATA_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
+def create_backup_file():
+    """Create a timestamped backup of the current in-memory data dict."""
+    timestamp = time.strftime('%m_%d_%Y_%H%M', time.localtime())
+    backup_filename = f"bot_data_backup_{timestamp}.json"
+    # Ensure backup directory exists
+    try:
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+    except Exception as e:
+        print(f"Failed to create backup directory '{BACKUP_DIR}': {e}")
+    full_path = os.path.join(BACKUP_DIR, backup_filename)
+    with open(full_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+    return full_path
+
+def prune_old_backups(keep: int = 7):
+    """Keep only the most recent 'keep' backup files."""
+    try:
+        if not os.path.isdir(BACKUP_DIR):
+            return
+        files = [f for f in os.listdir(BACKUP_DIR) if re.match(r'^bot_data_backup_\d{2}_\d{2}_\d{4}_\d{4}\.json$', f)]
+        files_sorted = sorted(
+            files,
+            key=lambda x: time.strptime(x.replace('bot_data_backup_', '').replace('.json', ''), '%m_%d_%Y_%H%M'),
+            reverse=True
+        )
+        for old in files_sorted[keep:]:
+            try:
+                os.remove(os.path.join(BACKUP_DIR, old))
+            except Exception as e:
+                print(f"Failed to remove old backup {old}: {e}")
+    except Exception as e:
+        print(f"Error pruning backups: {e}")
+
+# Periodic backup task (weekly)
+@tasks.loop(hours=168)
+async def backup_data_task():
+    try:
+        backup_filename = create_backup_file()
+        prune_old_backups(keep=7)
+        print(f"Backup created: {backup_filename}")
+    except Exception as e:
+        print(f"Error creating backup: {e}")
+
 # Initialize data
 data = load_data()
 current_count = data["counting"]["current_count"]
@@ -80,6 +168,9 @@ user_coins = data["user_coins"]
 user_rods = data["user_rods"]
 last_fish_time = data["last_fish_time"]
 fishing_records = data["records"]
+# Ensure new keys exist if loading from an older data file
+if "last_daily_time" not in data:
+    data["last_daily_time"] = {}
 
 # Rod definitions with fish probabilities
 RODS = {
@@ -102,19 +193,68 @@ RODS = {
         ("Legendary Fish 🐉", 0.15)
     ],
     "UltimateRod": [
-        ("Common Fish 🐟", 0.18),
-        ("Rare Fish 🐠", 0.24),
+        ("Common Fish 🐟", 0.15),
+        ("Rare Fish 🐠", 0.21),
         ("Epic Fish 🐳", 0.30),
         ("Legendary Fish 🐉", 0.25),
-        ("Ultimate Fish 🦅", 0.03)
+        ("Ultimate Fish 🦅", 0.09)
+    ],
+    "SuperbRod": [
+        ("Common Fish 🐟", 0.07),
+        ("Rare Fish 🐠", 0.11),
+        ("Epic Fish 🐳", 0.21),
+        ("Legendary Fish 🐉", 0.46),
+        ("Ultimate Fish 🦅", 0.15)
+    ],
+    "MasterRod": [
+        ("Common Fish 🐟", 0.05),
+        ("Rare Fish 🐠", 0.09),
+        ("Epic Fish 🐳", 0.18),
+        ("Legendary Fish 🐉", 0.45),
+        ("Ultimate Fish 🦅", 0.23)
+    ],
+    "MythicRod": [
+        ("Common Fish 🐟", 0.03),
+        ("Rare Fish 🐠", 0.06),
+        ("Epic Fish 🐳", 0.14),
+        ("Legendary Fish 🐉", 0.42),
+        ("Ultimate Fish 🦅", 0.35)
+    ],
+    "DivineRod": [
+        ("Common Fish 🐟", 0.02),
+        ("Rare Fish 🐠", 0.04),
+        ("Epic Fish 🐳", 0.10),
+        ("Legendary Fish 🐉", 0.39),
+        ("Ultimate Fish 🦅", 0.45)
     ]
 }
 
-# Shop prices
+# Shop prices (1k, 5k, 10k, 25k, then the same growth: 50k, 100k, 250k)
 ROD_PRICES = {
     "NewRod": 1000,
     "SpecialRod": 5000,
-    "UltimateRod": 10000
+    "UltimateRod": 10000,
+    "SuperbRod": 25000,
+    "MasterRod": 50000,
+    "MythicRod": 100000,
+    "DivineRod": 250000
+}
+
+DOUBLE_CATCH_CHANCE = {
+    "NewRod": 0.02,
+    "SpecialRod": 0.04,
+    "UltimateRod": 0.07,
+    "SuperbRod": 0.10,
+    "MasterRod": 0.18,
+    "MythicRod": 0.21,
+    "DivineRod": 0.25,
+}
+
+JACKPOT_CHANCE = {
+    "SuperbRod": 0.01,
+    "MasterRod": 0.015,
+    "MythicRod": 0.02,
+    "DivineRod": 0.03,
 }
 
 # Case-insensitive rod name normalization and lookup
@@ -128,6 +268,10 @@ ROD_NAME_LOOKUP.update({
     "new": "NewRod",
     "special": "SpecialRod",
     "ultimate": "UltimateRod",
+    "superb": "SuperbRod",
+    "master": "MasterRod",
+    "mythic": "MythicRod",
+    "divine": "DivineRod",
 })
 
 # Fish selling prices
@@ -142,8 +286,16 @@ FISH_PRICES = {
 @bot.event
 async def on_ready():
     print(f'Bot is ready! Logged in as {bot.user.name}')
-    # Start the random fish event task
-    random_fish_event_task.start()
+    # Start background tasks only if not already running (handles reconnects/resumes)
+    if not random_fish_event_task.is_running():
+        random_fish_event_task.start()
+    if not backup_data_task.is_running():
+        backup_data_task.start()
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} slash commands")
+    except Exception as e:
+        print(f"Failed to sync slash commands: {e}")
 
 @bot.event
 async def on_message(message):
@@ -217,30 +369,8 @@ async def on_message(message):
             save_data(data)
             await message.channel.send(f"{message.author.mention}, wrong number! The next number should be {current_count + 1}. Count reset to 0.")
 
-async def handle_random_fish_catch(message):
-    """Handle the random fish catch when someone says 'net'"""
-    global random_fish_event_active, random_fish_event_message
-    
-    user_id = str(message.author.id)
-    
-    # Get user's rod or default BasicRod
-    user_rod = user_rods.get(user_id, "BasicRod")
-    
-    # Determine number of fish to catch (2-6)
-    num_fish = random.randint(2, 6)
-    
-    # Get available fish types based on user's rod
-    available_fish = []
-    fish_weights = []
-    
-    for fish_type, weight in RODS[user_rod]:
-        available_fish.append(fish_type)
-        fish_weights.append(weight)
-    
-    # Catch the fish
-    catches = random.choices(available_fish, weights=fish_weights, k=num_fish)
-    
-    # Update fish data for the user
+def award_event_catches(user_id: str, catches: list):
+    """Add event catches to inventory and update records."""
     if user_id not in fish_data:
         fish_data[user_id] = {
             "Common Fish 🐟": 0,
@@ -249,53 +379,76 @@ async def handle_random_fish_catch(message):
             "Legendary Fish 🐉": 0,
             "Ultimate Fish 🦅": 0
         }
-    
-    # Add all catches to inventory and check for records
+
     current_time = time.time()
+    fish_to_record = {
+        "Common Fish 🐟": "most_common_fish",
+        "Rare Fish 🐠": "most_rare_fish",
+        "Epic Fish 🐳": "most_epic_fish",
+        "Legendary Fish 🐉": "most_legendary_fish",
+        "Ultimate Fish 🦅": "most_ultimate_fish"
+    }
+
     for catch in catches:
         fish_data[user_id][catch] += 1
-        
-        # Check for individual fish type records
         current_count = fish_data[user_id][catch]
-        
-        # Map fish names to record keys
-        fish_to_record = {
-            "Common Fish 🐟": "most_common_fish",
-            "Rare Fish 🐠": "most_rare_fish", 
-            "Epic Fish 🐳": "most_epic_fish",
-            "Legendary Fish 🐉": "most_legendary_fish",
-            "Ultimate Fish 🦅": "most_ultimate_fish"
-        }
-        
         record_key = fish_to_record.get(catch)
-        
         if record_key and record_key in fishing_records and current_count > fishing_records[record_key]["amount"]:
             fishing_records[record_key] = {
                 "user_id": user_id,
                 "amount": current_count,
                 "date": current_time
             }
-    
-    # Check for largest catch record
+
+    num_fish = len(catches)
     if num_fish > fishing_records["largest_catch"]["amount"]:
         fishing_records["largest_catch"] = {
             "user_id": user_id,
             "amount": num_fish,
             "date": current_time
         }
-    
+
     data["fish_data"] = fish_data
     data["records"] = fishing_records
     save_data(data)
-    
-    # Create catch message
-    catch_list = ", ".join(catches)
-    catch_message = f"🎣 **RANDOM FISH EVENT!** 🎣\n{message.author.mention} caught **{num_fish} fish** with their {user_rod}!\n\n**Caught:** {catch_list}"
-    
-    # End the event
+    return num_fish
+
+async def handle_random_fish_catch(message):
+    """Handle the random fish catch when someone says 'net'"""
+    global random_fish_event_active, random_fish_event_message, random_fish_event_type
+
+    user_id = str(message.author.id)
+    user_rod = user_rods.get(user_id, "BasicRod")
+    event_type = random_fish_event_type or EVENT_SCHOOL
+
+    if event_type == EVENT_COMMON_SWARM:
+        catches = ["Common Fish 🐟"] * 20
+        catch_message = (
+            f"🐟 **COMMON FISH SWARM!** 🐟\n{message.author.mention} scooped up **20 Common Fish**!"
+        )
+    elif event_type == EVENT_MIXED_HAUL:
+        catches = (["Rare Fish 🐠"] * 5) + (["Epic Fish 🐳"] * 5) + ["Legendary Fish 🐉"]
+        catch_message = (
+            f"✨ **TREASURE SCHOOL!** ✨\n{message.author.mention} caught **5 Rare, 5 Epic, and 1 Legendary**!"
+        )
+    else:
+        num_fish = random.randint(2, 6)
+        available_fish = []
+        fish_weights = []
+        for fish_type, weight in RODS[user_rod]:
+            available_fish.append(fish_type)
+            fish_weights.append(weight)
+        catches = random.choices(available_fish, weights=fish_weights, k=num_fish)
+        catch_list = ", ".join(catches)
+        catch_message = (
+            f"🎣 **RANDOM FISH EVENT!** 🎣\n{message.author.mention} caught **{num_fish} fish** "
+            f"with their {user_rod}!\n\n**Caught:** {catch_list}"
+        )
+
+    award_event_catches(user_id, catches)
     random_fish_event_active = False
     random_fish_event_message = None
-    
+    random_fish_event_type = None
     await message.channel.send(catch_message)
 
 @tasks.loop(hours=1)  # Check every hour
@@ -312,50 +465,54 @@ async def random_fish_event_task():
     if random.random() < 0.15:  # ~15% chance per hour = roughly every 6-7 hours on average
         await trigger_random_fish_event()
 
-async def trigger_random_fish_event():
+async def trigger_random_fish_event(event_type: str = None):
     """Trigger a random fish event"""
-    global random_fish_event_active, random_fish_event_message, random_fish_event_start_time
-    
+    global random_fish_event_active, random_fish_event_message, random_fish_event_start_time, random_fish_event_type
+
     try:
         channel = bot.get_channel(FISHING_CHANNEL_ID)
         if not channel:
             return
-        
+
+        if event_type not in FISH_EVENTS:
+            event_type = random.choice(list(FISH_EVENTS.keys()))
+
+        event = FISH_EVENTS[event_type]
         random_fish_event_active = True
         random_fish_event_start_time = time.time()
-        
-        # Create the event message
+        random_fish_event_type = event_type
+
         embed = discord.Embed(
-            title="🎣 RANDOM FISH EVENT! 🎣",
-            description="A school of fish has appeared! The first person to type **`net`** will catch **2-6 random fish**!",
-            color=0x00ff00
+            title=event["title"],
+            description=event["description"],
+            color=event["color"]
         )
         embed.add_field(name="⏰ Time Limit", value="This event will last for 30 minutes!", inline=False)
         embed.add_field(name="🎣 How to Participate", value="Simply type `net` in this channel!", inline=False)
-        embed.add_field(name="🎣 Fish Types", value="All fish types are available (except Ultimate Fish unless you have Ultimate Rod)!", inline=False)
-        
+        embed.add_field(name="🎁 Reward", value=event["reward"], inline=False)
+
         random_fish_event_message = await channel.send(embed=embed)
-        
-        # Set a timer to end the event after 30 minutes
-        await asyncio.sleep(1800)  # 30 minutes (30 * 60 = 1800 seconds)
-        
-        # End the event if it's still active
+
+        await asyncio.sleep(1800)  # 30 minutes
+
         if random_fish_event_active:
             random_fish_event_active = False
+            random_fish_event_type = None
             embed = discord.Embed(
-                title="🎣 RANDOM FISH EVENT ENDED! 🎣",
-                description="The fish have swam away! No one caught them in time.",
+                title="🎣 FISH EVENT ENDED! 🎣",
+                description=event["ended"],
                 color=0xff0000
             )
             await channel.send(embed=embed)
             random_fish_event_message = None
-            
+
     except Exception as e:
         print(f"Error in random fish event: {e}")
         random_fish_event_active = False
         random_fish_event_message = None
+        random_fish_event_type = None
 
-@bot.command()
+@bot.hybrid_command()
 async def setcount(ctx, number: int):
     """Admin command to set the current count"""
     if ctx.author.guild_permissions.administrator:
@@ -369,7 +526,30 @@ async def setcount(ctx, number: int):
     else:
         await ctx.send("You need administrator permissions to use this command!")
 
-@bot.command()
+@bot.hybrid_command(name="help", aliases=["commands"])
+async def help_commands(ctx):
+    """List all commands."""
+    commands_list = [
+        "! or /help - Show this command list",
+        "! or /menu - Open the fishing button menu",
+        "! or /fish - Catch fish (fishing channel only)",
+        "! or /fishstats [@user] - Show fishing stats",
+        "! or /sellfish <type> <amount> - Sell specific fish",
+        "! or /sell <type|all> <amount> - Sell fish (or all)",
+        "! or /shop - Show rod shop",
+        "! or /buyrod <rod name> - Buy a rod",
+        "! or /donate @user <amount> - Donate coins",
+        "! or /topfishers - Top fishers leaderboard",
+        "! or /topcoins - Richest players leaderboard",
+        "! or /toprare - Rare fish leaderboard",
+        "! or /leaderboard <fishers|coins|rare> - Category leaderboard",
+        "! or /records - Show all-time fishing records",
+        "! or /daily - Claim daily coin reward",
+        "! or /fishstatus - Check random fish event status",
+    ]
+    await ctx.send("**Available Commands:**\n" + "\n".join(commands_list))
+
+@bot.hybrid_command()
 async def resetcount(ctx):
     """Admin command to reset the count"""
     if ctx.author.guild_permissions.administrator:
@@ -383,7 +563,7 @@ async def resetcount(ctx):
     else:
         await ctx.send("You need administrator permissions to use this command!")
 
-@bot.command()
+@bot.hybrid_command()
 async def fish(ctx):
     """Fishing command to catch random fish in the fishing channel"""
     if ctx.channel.id != FISHING_CHANNEL_ID:
@@ -405,16 +585,7 @@ async def fish(ctx):
     fish_types = RODS[user_rod]
     
     # Check for double catch chance (different chances for different rods)
-    double_catch = False
-    if user_rod == "NewRod":
-        # 2% chance for double catch with NewRod
-        double_catch = random.random() < 0.02
-    elif user_rod == "SpecialRod":
-        # 4% chance for double catch with SpecialRod
-        double_catch = random.random() < 0.04
-    elif user_rod == "UltimateRod":
-        # 7% chance for double catch with UltimateRod
-        double_catch = random.random() < 0.07
+    double_catch = random.random() < DOUBLE_CATCH_CHANCE.get(user_rod, 0)
     
     # Generate random catch(es)
     if double_catch:
@@ -427,12 +598,16 @@ async def fish(ctx):
         catch_message = f"{ctx.author.mention} went fishing with {user_rod} and caught **TWO FISH**! 🎣\n{catches[0]} and {catches[1]}!"
     else:
         # Catch one fish
-        catches = [random.choices(
-            [fish[0] for fish in fish_types],
-            weights=[fish[1] for fish in fish_types],
-            k=1
-        )[0]]
-        catch_message = f"{ctx.author.mention} went fishing with {user_rod} and caught a {catches[0]}!"
+        if random.random() < JACKPOT_CHANCE.get(user_rod, 0):
+            catches = [fish[0] for fish in fish_types]
+            catch_message = f"{ctx.author.mention} went fishing with {user_rod} and hit the JACKPOT! 🎉 Caught ALL fish types: {', '.join(catches)}"
+        else:
+            catches = [random.choices(
+                [fish[0] for fish in fish_types],
+                weights=[fish[1] for fish in fish_types],
+                k=1
+            )[0]]
+            catch_message = f"{ctx.author.mention} went fishing with {user_rod} and caught a {catches[0]}!"
     
     # Update fish data for the user
     if user_id not in fish_data:
@@ -487,7 +662,7 @@ async def fish(ctx):
     
     await ctx.send(catch_message)
 
-@bot.command()
+@bot.hybrid_command()
 async def fishstats(ctx, member: discord.Member = None):
     """Display the user's fish catch statistics. Use !fishstats @user to see another user's stats."""
     # If no member is mentioned, use the command author
@@ -520,7 +695,7 @@ async def fishstats(ctx, member: discord.Member = None):
     
     await ctx.send(stats)
 
-@bot.command()
+@bot.hybrid_command()
 async def sellfish(ctx, fish_type: str, amount: int = 1):
     """Sell fish for coins"""
     user_id = str(ctx.author.id)
@@ -573,7 +748,7 @@ async def sellfish(ctx, fish_type: str, amount: int = 1):
     
     await ctx.send(f"{ctx.author.mention} sold {amount} {full_fish_name} for {FISH_PRICES[full_fish_name] * amount} coins!")
 
-@bot.command()
+@bot.hybrid_command()
 async def sell(ctx, fish_type: str, amount: int = 1):
     """Sell fish for coins (shorthand for sellfish)"""
     user_id = str(ctx.author.id)
@@ -682,7 +857,7 @@ async def sell(ctx, fish_type: str, amount: int = 1):
     
     await ctx.send(f"{ctx.author.mention} sold {amount} {full_fish_name} for {sale_amount} coins!")
 
-@bot.command()
+@bot.hybrid_command()
 async def shop(ctx):
     """Display the fishing shop"""
     shop_message = "🎣 Fishing Shop 🎣\n\n"
@@ -691,7 +866,7 @@ async def shop(ctx):
     shop_message += "\nUse !buyrod rodname to purchase a rod!"
     await ctx.send(shop_message)
 
-@bot.command()
+@bot.hybrid_command()
 async def buyrod(ctx, *, rod_name: str):
     """Buy a fishing rod from the shop"""
     user_id = str(ctx.author.id)
@@ -717,7 +892,7 @@ async def buyrod(ctx, *, rod_name: str):
     
     await ctx.send(f"{ctx.author.mention} purchased {canonical_rod_name} for {ROD_PRICES[canonical_rod_name]} coins!")
 
-@bot.command()
+@bot.hybrid_command()
 async def donate(ctx, member: discord.Member, amount: int):
     """Donate coin(s) to another player"""
     user_id = str(ctx.author.id)
@@ -748,7 +923,7 @@ async def donate(ctx, member: discord.Member, amount: int):
     
     await ctx.send(f"{ctx.author.mention} donated {amount} coin(s) to {member.mention}! 💰")
 
-@bot.command()
+@bot.hybrid_command()
 async def topfishers(ctx):
     """Show top 10 players by total fish caught"""
     # Calculate total fish for each user
@@ -789,7 +964,7 @@ async def topfishers(ctx):
     
     await ctx.send(leaderboard)
 
-@bot.command()
+@bot.hybrid_command()
 async def topcoins(ctx):
     """Show top 10 richest players"""
     if not user_coins:
@@ -823,7 +998,7 @@ async def topcoins(ctx):
     
     await ctx.send(leaderboard)
 
-@bot.command()
+@bot.hybrid_command()
 async def toprare(ctx):
     """Show top 10 players by rare fish caught (Epic, Legendary, Ultimate)"""
     # Calculate rare fish totals for each user
@@ -866,7 +1041,7 @@ async def toprare(ctx):
     
     await ctx.send(leaderboard)
 
-@bot.command()
+@bot.hybrid_command()
 async def leaderboard(ctx, category: str = "fishers"):
     """Show leaderboards. Categories: fishers, coins, rare"""
     category = category.lower()
@@ -881,7 +1056,7 @@ async def leaderboard(ctx, category: str = "fishers"):
         await ctx.send("Available leaderboard categories: `fishers`, `coins`, `rare`\n"
                       "Examples: `!leaderboard fishers`, `!leaderboard coins`, `!leaderboard rare`")
 
-@bot.command()
+@bot.hybrid_command()
 async def records(ctx):
     """Display all-time fishing records"""
     records_message = "🏆 **All-Time Fishing Records** 🏆\n\n"
@@ -934,7 +1109,7 @@ async def records(ctx):
     
     await ctx.send(records_message)
 
-@bot.command()
+@bot.hybrid_command()
 async def setrecord(ctx, record_type: str, member: discord.Member, value: int):
     """Admin command to manually set records"""
     if not ctx.author.guild_permissions.administrator:
@@ -989,8 +1164,48 @@ async def setrecord(ctx, record_type: str, member: discord.Member, value: int):
     
     await ctx.send(f"Record set! {member.mention} now holds the record for {record_type} with {value}!")
 
-@bot.command()
-async def triggerfish(ctx):
+@bot.hybrid_command()
+async def daily(ctx):
+    """Claim a daily coin reward (25-100 coins), once every 24 hours."""
+    user_id = str(ctx.author.id)
+
+    # Initialize coins dict entry if missing
+    if user_id not in user_coins:
+        user_coins[user_id] = 0
+
+    # Ensure last_daily_time exists in data
+    last_daily_time = data.get("last_daily_time", {})
+    data["last_daily_time"] = last_daily_time
+
+    now = time.time()
+    last_claim = last_daily_time.get(user_id)
+
+    if last_claim is not None:
+        elapsed = now - last_claim
+        seconds_in_day = 24 * 60 * 60
+        if elapsed < seconds_in_day:
+            remaining = int(seconds_in_day - elapsed)
+            hours = remaining // 3600
+            minutes = (remaining % 3600) // 60
+            seconds = remaining % 60
+            await ctx.send(f"{ctx.author.mention}, you have already claimed your daily reward. Try again in {hours}h {minutes}m {seconds}s.")
+            return
+
+    # Grant reward
+    reward = random.randint(25, 100)
+    user_coins[user_id] += reward
+    last_daily_time[user_id] = now
+
+    # Persist
+    data["user_coins"] = user_coins
+    data["last_daily_time"] = last_daily_time
+    save_data(data)
+
+    await ctx.send(f"{ctx.author.mention} claimed their daily reward: {reward} coins! 💰")
+
+@bot.hybrid_command()
+@app_commands.describe(event_type="school, common, or mixed. Leave empty for a random event.")
+async def triggerfish(ctx, event_type: str = None):
     """Admin command to manually trigger a random fish event"""
     if not ctx.author.guild_permissions.administrator:
         await ctx.send("You need administrator permissions to trigger fish events!")
@@ -1002,19 +1217,35 @@ async def triggerfish(ctx):
     if random_fish_event_active:
         await ctx.send("A random fish event is already active! Wait for it to end first.")
         return
+
+    event_map = {
+        "school": EVENT_SCHOOL,
+        "random": EVENT_SCHOOL,
+        "common": EVENT_COMMON_SWARM,
+        "swarm": EVENT_COMMON_SWARM,
+        "mixed": EVENT_MIXED_HAUL,
+        "treasure": EVENT_MIXED_HAUL,
+        "haul": EVENT_MIXED_HAUL,
+    }
+    chosen = None
+    if event_type:
+        chosen = event_map.get(event_type.lower().strip())
+        if chosen is None:
+            await ctx.send("Invalid event type. Use `school`, `common`, or `mixed`.")
+            return
     
     # Trigger the event
-    await ctx.send("🎣 **ADMIN TRIGGERED FISH EVENT!** 🎣\nA random fish event is starting now!")
-    await trigger_random_fish_event()
+    await ctx.send("🎣 **ADMIN TRIGGERED FISH EVENT!** 🎣\nA fish event is starting now!")
+    await trigger_random_fish_event(chosen)
 
-@bot.command()
+@bot.hybrid_command()
 async def stopfish(ctx):
     """Admin command to stop the current random fish event"""
     if not ctx.author.guild_permissions.administrator:
         await ctx.send("You need administrator permissions to stop fish events!")
         return
     
-    global random_fish_event_active, random_fish_event_message
+    global random_fish_event_active, random_fish_event_message, random_fish_event_type
     
     if not random_fish_event_active:
         await ctx.send("No random fish event is currently active.")
@@ -1023,6 +1254,7 @@ async def stopfish(ctx):
     # Stop the event
     random_fish_event_active = False
     random_fish_event_message = None
+    random_fish_event_type = None
     
     embed = discord.Embed(
         title="🎣 RANDOM FISH EVENT STOPPED! 🎣",
@@ -1031,22 +1263,24 @@ async def stopfish(ctx):
     )
     await ctx.send(embed=embed)
 
-@bot.command()
+@bot.hybrid_command()
 async def fishstatus(ctx):
     """Check the status of the random fish event"""
-    global random_fish_event_active, random_fish_event_start_time
+    global random_fish_event_active, random_fish_event_start_time, random_fish_event_type
     
     if random_fish_event_active:
         elapsed_time = int(time.time() - random_fish_event_start_time)
         remaining_time = max(0, 1800 - elapsed_time)  # 30 minutes = 1800 seconds
         minutes = remaining_time // 60
         seconds = remaining_time % 60
+        event = FISH_EVENTS.get(random_fish_event_type, FISH_EVENTS[EVENT_SCHOOL])
         
         embed = discord.Embed(
             title="🎣 Random Fish Event Status",
-            description="A random fish event is currently **ACTIVE**!",
-            color=0x00ff00
+            description=f"**{event['title']}** is currently **ACTIVE**!",
+            color=event["color"]
         )
+        embed.add_field(name="🎁 Reward", value=event["reward"], inline=False)
         embed.add_field(name="⏰ Time Remaining", value=f"{minutes}m {seconds}s", inline=False)
         embed.add_field(name="🎣 How to Participate", value="Type `net` in this channel!", inline=False)
     else:
@@ -1059,5 +1293,325 @@ async def fishstatus(ctx):
     
     await ctx.send(embed=embed)
 
-# Replace 'YOUR_TOKEN_HERE' with your bot token
-bot.run('YOUR_TOKEN_HERE')
+@bot.hybrid_command()
+async def backup(ctx):
+    """Admin command to create a manual backup of the bot data"""
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("You need administrator permissions to create a backup!")
+        return
+    try:
+        backup_filename = create_backup_file()
+        prune_old_backups(keep=7)
+        await ctx.send(f"Backup created: `{backup_filename}`")
+    except Exception as e:
+        await ctx.send(f"Failed to create backup: {e}")
+
+
+class MenuContext:
+    """Lets existing commands reply to a button or dropdown interaction."""
+
+    def __init__(self, interaction, channel):
+        self.interaction = interaction
+        self.author = interaction.user
+        self.channel = channel
+        self.guild = interaction.guild
+
+    async def send(self, content=None, *, embed=None):
+        kwargs = {}
+        if content is not None:
+            kwargs["content"] = content
+        if embed is not None:
+            kwargs["embed"] = embed
+        if not kwargs:
+            kwargs["content"] = "Done."
+        if self.interaction.response.is_done():
+            return await self.interaction.followup.send(**kwargs)
+        return await self.interaction.response.send_message(**kwargs)
+
+
+_menu_locks = {}
+
+
+def _menu_lock(user_id):
+    lock = _menu_locks.get(user_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _menu_locks[user_id] = lock
+    return lock
+
+
+def _is_admin(user):
+    return isinstance(user, discord.Member) and user.guild_permissions.administrator
+
+
+class ConfirmView(discord.ui.View):
+    def __init__(self, owner_id, action):
+        super().__init__(timeout=30)
+        self.owner_id = owner_id
+        self.action = action
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("This confirmation is not for you.", ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction, button):
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content="Confirmed.", view=self)
+        channel = interaction.channel
+        if channel is None:
+            await interaction.followup.send("I could not find this channel.", ephemeral=True)
+            self.stop()
+            return
+        ctx = MenuContext(interaction, channel)
+        # The confirmation already used the interaction response, so post the
+        # command result in the channel instead of as a hidden followup.
+        async def public_send(content=None, *, embed=None):
+            kwargs = {}
+            if content is not None:
+                kwargs["content"] = content
+            if embed is not None:
+                kwargs["embed"] = embed
+            return await channel.send(**kwargs)
+        ctx.send = public_send
+        try:
+            async with _menu_lock(interaction.user.id):
+                await self.action(ctx)
+        except Exception as e:
+            print(f"Menu confirmation failed: {e}")
+            await interaction.followup.send(f"That action failed: {e}", ephemeral=True)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction, button):
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content="Cancelled.", view=self)
+        self.stop()
+
+
+async def _ask_confirm(interaction, prompt, action):
+    view = ConfirmView(interaction.user.id, action)
+    await interaction.response.send_message(prompt, view=view, ephemeral=True)
+
+
+class AdminMenu(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+
+    async def interaction_check(self, interaction):
+        if not _is_admin(interaction.user):
+            await interaction.response.send_message(
+                "You need administrator permissions to use this menu.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Reset Count", style=discord.ButtonStyle.danger, row=0)
+    async def reset_count(self, interaction, button):
+        await _ask_confirm(
+            interaction,
+            "Reset the counting channel to 0?",
+            resetcount.callback,
+        )
+
+    @discord.ui.button(label="Stop Event", style=discord.ButtonStyle.danger, row=0)
+    async def stop_event(self, interaction, button):
+        await _ask_confirm(
+            interaction,
+            "Stop the active fish event?",
+            stopfish.callback,
+        )
+
+    @discord.ui.button(label="Backup", style=discord.ButtonStyle.secondary, row=0)
+    async def backup_now(self, interaction, button):
+        await interaction.response.defer(ephemeral=True)
+        ctx = MenuContext(interaction, interaction.channel)
+        try:
+            async with _menu_lock(interaction.user.id):
+                await backup.callback(ctx)
+        except Exception as e:
+            print(f"Menu backup failed: {e}")
+            await interaction.followup.send(f"That action failed: {e}", ephemeral=True)
+
+    @discord.ui.select(
+        placeholder="Start a fish event",
+        min_values=1,
+        max_values=1,
+        options=[
+            discord.SelectOption(label="School", value="school", description="2-6 fish based on the catcher's rod"),
+            discord.SelectOption(label="Common swarm", value="common", description="20 Common Fish"),
+            discord.SelectOption(label="Treasure school", value="mixed", description="5 Rare, 5 Epic, and 1 Legendary"),
+        ],
+        row=1,
+    )
+    async def start_event(self, interaction, select):
+        choice = select.values[0]
+        event_ids = {
+            "school": EVENT_SCHOOL,
+            "common": EVENT_COMMON_SWARM,
+            "mixed": EVENT_MIXED_HAUL,
+        }
+        event_id = event_ids.get(choice)
+        if event_id is None:
+            await interaction.response.send_message("Unknown event.", ephemeral=True)
+            return
+
+        async def launch(ctx):
+            global random_fish_event_active
+            if random_fish_event_active:
+                await ctx.send("A random fish event is already active! Wait for it to end first.")
+                return
+            await ctx.send("🎣 **ADMIN TRIGGERED FISH EVENT!** 🎣\nA fish event is starting now!")
+            asyncio.create_task(trigger_random_fish_event(event_id))
+
+        labels = {"school": "school", "common": "common swarm", "mixed": "treasure school"}
+        await _ask_confirm(interaction, f"Start a {labels[choice]} event now?", launch)
+
+
+class FishingMenu(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=900)
+        self.message = None
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
+
+    async def _run(self, interaction, command, *args, **kwargs):
+        if interaction.guild is None or interaction.channel is None:
+            await interaction.response.send_message("Use this menu in a server channel.", ephemeral=True)
+            return
+        await interaction.response.defer()
+        ctx = MenuContext(interaction, interaction.channel)
+        try:
+            async with _menu_lock(interaction.user.id):
+                await command.callback(ctx, *args, **kwargs)
+        except Exception as e:
+            print(f"Menu action failed: {e}")
+            await interaction.followup.send(f"That action failed: {e}")
+        try:
+            if interaction.message is not None:
+                await interaction.message.edit(view=self)
+        except Exception:
+            pass
+
+    @discord.ui.button(label="Fish", style=discord.ButtonStyle.success, row=0)
+    async def fish_button(self, interaction, button):
+        await self._run(interaction, fish)
+
+    @discord.ui.button(label="Stats", style=discord.ButtonStyle.primary, row=0)
+    async def stats_button(self, interaction, button):
+        await self._run(interaction, fishstats)
+
+    @discord.ui.button(label="Daily", style=discord.ButtonStyle.primary, row=0)
+    async def daily_button(self, interaction, button):
+        await self._run(interaction, daily)
+
+    @discord.ui.button(label="Sell All", style=discord.ButtonStyle.secondary, row=0)
+    async def sell_all_button(self, interaction, button):
+        await self._run(interaction, sell, "all")
+
+    @discord.ui.button(label="Shop", style=discord.ButtonStyle.secondary, row=0)
+    async def shop_button(self, interaction, button):
+        await self._run(interaction, shop)
+
+    @discord.ui.button(label="Records", style=discord.ButtonStyle.primary, row=1)
+    async def records_button(self, interaction, button):
+        await self._run(interaction, records)
+
+    @discord.ui.button(label="Event Status", style=discord.ButtonStyle.primary, row=1)
+    async def status_button(self, interaction, button):
+        await self._run(interaction, fishstatus)
+
+    @discord.ui.button(label="Help", style=discord.ButtonStyle.secondary, row=1)
+    async def help_button(self, interaction, button):
+        await self._run(interaction, help_commands)
+
+    @discord.ui.button(label="Admin", style=discord.ButtonStyle.danger, row=1)
+    async def admin_button(self, interaction, button):
+        if not _is_admin(interaction.user):
+            await interaction.response.send_message(
+                "You need administrator permissions to use this menu.",
+                ephemeral=True,
+            )
+            return
+        embed = discord.Embed(
+            title="Admin menu",
+            description="These actions are only visible to you. Reset, stop, and starting an event ask for confirmation.",
+            color=0xff5555,
+        )
+        await interaction.response.send_message(embed=embed, view=AdminMenu(), ephemeral=True)
+
+    @discord.ui.select(
+        placeholder="Buy a rod",
+        min_values=1,
+        max_values=1,
+        options=[
+            discord.SelectOption(label=rod, value=rod, description=f"{price:,} coins")
+            for rod, price in ROD_PRICES.items()
+        ],
+        row=2,
+    )
+    async def buy_rod(self, interaction, select):
+        await self._run(interaction, buyrod, rod_name=select.values[0])
+
+    @discord.ui.select(
+        placeholder="Leaderboard",
+        min_values=1,
+        max_values=1,
+        options=[
+            discord.SelectOption(label="Top fishers", value="fishers"),
+            discord.SelectOption(label="Richest players", value="coins"),
+            discord.SelectOption(label="Rare fish", value="rare"),
+        ],
+        row=3,
+    )
+    async def leaderboard_select(self, interaction, select):
+        await self._run(interaction, leaderboard, select.values[0])
+
+
+def build_menu_embed():
+    embed = discord.Embed(
+        title="Fishing menu",
+        description=(
+            "Use the buttons and dropdowns below. Each action uses the person who clicked, "
+            "not the person who opened the menu.\n\n"
+            "Fish still only works in the fishing channel. Donate, selling a set amount, "
+            "and setting the count still need a typed command because they need extra details."
+        ),
+        color=0x3498db,
+    )
+    embed.add_field(
+        name="Still typed",
+        value="`!donate`, `!sell common 5`, `!setcount`, `!setrecord`, and `net` during an event",
+        inline=False,
+    )
+    embed.set_footer(text="This menu turns off after 15 minutes. Run !menu or /menu again.")
+    return embed
+
+
+@bot.hybrid_command(name="menu", aliases=["gui"])
+async def menu(ctx):
+    """Open a Discord button menu for the fishing commands."""
+    if ctx.guild is None:
+        await ctx.send("Use this menu in a server channel.")
+        return
+    view = FishingMenu()
+    message = await ctx.send(embed=build_menu_embed(), view=view)
+    view.message = message
+
+bot.run(TOKEN)
